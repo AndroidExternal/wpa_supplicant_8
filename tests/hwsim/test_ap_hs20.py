@@ -17,7 +17,7 @@ import socket
 import subprocess
 
 import hostapd
-from utils import HwsimSkip, skip_with_fips
+from utils import HwsimSkip, skip_with_fips, alloc_fail
 import hwsim_utils
 from tshark import run_tshark
 from wlantest import Wlantest
@@ -168,13 +168,13 @@ def test_ap_anqp_sharing(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['hessid'] = bssid
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     bssid2 = apdev[1]['bssid']
     params = hs20_ap_params()
     params['hessid'] = bssid
     params['nai_realm'] = [ "0,example.com,13[5:6],21[2:4][5:7]" ]
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     dev[0].hs20_enable()
     id = dev[0].add_cred_values({ 'realm': "example.com", 'username': "test",
@@ -212,6 +212,37 @@ def test_ap_anqp_sharing(dev, apdev):
     if res1['anqp_nai_realm'] == res2['anqp_nai_realm']:
         raise Exception("ANQP results were not unshared")
 
+def test_ap_anqp_sharing_oom(dev, apdev):
+    """ANQP sharing within ESS and explicit unshare OOM"""
+    check_eap_capa(dev[0], "MSCHAPV2")
+    dev[0].flush_scan_cache()
+
+    bssid = apdev[0]['bssid']
+    params = hs20_ap_params()
+    params['hessid'] = bssid
+    hostapd.add_ap(apdev[0], params)
+
+    bssid2 = apdev[1]['bssid']
+    params = hs20_ap_params()
+    params['hessid'] = bssid
+    params['nai_realm'] = [ "0,example.com,13[5:6],21[2:4][5:7]" ]
+    hostapd.add_ap(apdev[1], params)
+
+    dev[0].hs20_enable()
+    id = dev[0].add_cred_values({ 'realm': "example.com", 'username': "test",
+                                  'password': "secret",
+                                  'domain': "example.com" })
+    dev[0].scan_for_bss(bssid, freq="2412")
+    dev[0].scan_for_bss(bssid2, freq="2412")
+    interworking_select(dev[0], None, "home", freq="2412")
+    dev[0].dump_monitor()
+
+    with alloc_fail(dev[0], 1, "wpa_bss_anqp_clone"):
+        dev[0].request("ANQP_GET " + bssid + " 263")
+        ev = dev[0].wait_event(["RX-ANQP"], timeout=5)
+        if ev is None:
+            raise Exception("ANQP operation timed out")
+
 def test_ap_nai_home_realm_query(dev, apdev):
     """NAI Home Realm Query"""
     check_eap_capa(dev[0], "MSCHAPV2")
@@ -219,7 +250,7 @@ def test_ap_nai_home_realm_query(dev, apdev):
     params = hs20_ap_params()
     params['nai_realm'] = [ "0,example.com,13[5:6],21[2:4][5:7]",
                             "0,another.example.org" ]
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].scan(freq="2412")
     dev[0].request("HS20_GET_NAI_HOME_REALM_LIST " + bssid + " realm=example.com")
@@ -298,7 +329,7 @@ def _test_ap_interworking_scan_filtering(dev, apdev):
     ssid = "test-hs20-ap1"
     params['ssid'] = ssid
     params['hessid'] = bssid
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hapd0 = hostapd.add_ap(apdev[0], params)
 
     bssid2 = apdev[1]['bssid']
     params = hs20_ap_params()
@@ -308,10 +339,11 @@ def _test_ap_interworking_scan_filtering(dev, apdev):
     params['access_network_type'] = "1"
     del params['venue_group']
     del params['venue_type']
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     dev[0].hs20_enable()
 
+    Wlantest.setup(hapd0)
     wt = Wlantest()
     wt.flush()
 
@@ -373,7 +405,7 @@ def test_ap_hs20_select(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['hessid'] = bssid
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     id = dev[0].add_cred_values({ 'realm': "example.com", 'username': "test",
@@ -399,7 +431,7 @@ def test_ap_hs20_select(dev, apdev):
     params['nai_realm'] = [ "0,example.org,21" ]
     params['hessid'] = bssid2
     params['domain_name'] = "example.org"
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
     dev[0].remove_cred(id)
     id = dev[0].add_cred_values({ 'realm': "example.org", 'username': "test",
                                   'password': "secret",
@@ -412,7 +444,7 @@ def hs20_simulated_sim(dev, ap, method):
     params['hessid'] = bssid
     params['anqp_3gpp_cell_net'] = "555,444"
     params['domain_name'] = "wlan.mnc444.mcc555.3gppnetwork.org"
-    hostapd.add_ap(ap['ifname'], params)
+    hostapd.add_ap(ap, params)
 
     dev.hs20_enable()
     dev.add_cred_values({ 'imsi': "555444-333222111", 'eap': method,
@@ -448,7 +480,7 @@ def test_ap_hs20_ext_sim(dev, apdev):
     params['hessid'] = bssid
     params['anqp_3gpp_cell_net'] = "232,01"
     params['domain_name'] = "wlan.mnc001.mcc232.3gppnetwork.org"
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     try:
@@ -468,7 +500,7 @@ def test_ap_hs20_ext_sim_roaming(dev, apdev):
     params['hessid'] = bssid
     params['anqp_3gpp_cell_net'] = "244,91;310,026;232,01;234,56"
     params['domain_name'] = "wlan.mnc091.mcc244.3gppnetwork.org"
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     try:
@@ -487,7 +519,7 @@ def test_ap_hs20_username(dev, apdev):
     params = hs20_ap_params()
     params['hessid'] = bssid
     params['disable_dgaf'] = '1'
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     id = dev[0].add_cred_values({ 'realm': "example.com",
@@ -517,7 +549,7 @@ def test_ap_hs20_connect_api(dev, apdev):
     params = hs20_ap_params()
     params['hessid'] = bssid
     params['disable_dgaf'] = '1'
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     wpas = WpaSupplicant(global_iface='/tmp/wpas-wlan5')
     wpas.interface_add("wlan5", drv_params="force_connect_cmd=1")
@@ -545,7 +577,7 @@ def test_ap_hs20_auto_interworking(dev, apdev):
     params = hs20_ap_params()
     params['hessid'] = bssid
     params['disable_dgaf'] = '1'
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable(auto_interworking=True)
     id = dev[0].add_cred_values({ 'realm': "example.com",
@@ -565,7 +597,7 @@ def test_ap_hs20_auto_interworking(dev, apdev):
 
 def test_ap_hs20_auto_interworking_no_match(dev, apdev):
     """Hotspot 2.0 connection with auto_interworking=1 and no matching network"""
-    hapd = hostapd.add_ap(apdev[0]['ifname'], { "ssid": "mismatch" })
+    hapd = hostapd.add_ap(apdev[0], { "ssid": "mismatch" })
 
     dev[0].hs20_enable(auto_interworking=True)
     id = dev[0].connect("mismatch", psk="12345678", scan_freq="2412",
@@ -606,7 +638,7 @@ def test_ap_hs20_auto_interworking_no_cred_match(dev, apdev):
     """Hotspot 2.0 connection with auto_interworking=1 but no cred match"""
     bssid = apdev[0]['bssid']
     params = { "ssid": "test" }
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable(auto_interworking=True)
     dev[0].add_cred_values({ 'realm': "example.com",
@@ -628,7 +660,7 @@ def eap_test(dev, ap, eap_params, method, user):
     bssid = ap['bssid']
     params = hs20_ap_params()
     params['nai_realm'] = [ "0,example.com," + eap_params ]
-    hostapd.add_ap(ap['ifname'], params)
+    hostapd.add_ap(ap, params)
 
     dev.hs20_enable()
     dev.add_cred_values({ 'realm': "example.com",
@@ -643,7 +675,7 @@ def test_ap_hs20_eap_unknown(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['nai_realm'] = "0,example.com,99"
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     dev[0].add_cred_values(default_cred())
@@ -668,7 +700,7 @@ def test_ap_hs20_eap_peap_unknown(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['nai_realm'] = "0,example.com,25[3:99]"
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     dev[0].add_cred_values(default_cred())
@@ -694,7 +726,7 @@ def test_ap_hs20_eap_ttls_eap_unknown(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['nai_realm'] = "0,example.com,21[3:99]"
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     dev[0].add_cred_values(default_cred())
@@ -705,7 +737,7 @@ def test_ap_hs20_eap_ttls_eap_unsupported(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['nai_realm'] = "0,example.com,21[3:5]"
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     dev[0].add_cred_values(default_cred())
@@ -716,7 +748,7 @@ def test_ap_hs20_eap_ttls_unknown(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['nai_realm'] = "0,example.com,21[2:5]"
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     dev[0].add_cred_values(default_cred())
@@ -737,7 +769,7 @@ def test_ap_hs20_eap_tls(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['nai_realm'] = [ "0,example.com,13[5:6]" ]
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     dev[0].add_cred_values({ 'realm': "example.com",
@@ -753,7 +785,7 @@ def test_ap_hs20_eap_cert_unknown(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['nai_realm'] = [ "0,example.com,99[5:6]" ]
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     dev[0].add_cred_values({ 'realm': "example.com",
@@ -768,7 +800,7 @@ def test_ap_hs20_eap_cert_unsupported(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['nai_realm'] = [ "0,example.com,21[5:6]" ]
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     dev[0].add_cred_values({ 'realm': "example.com",
@@ -782,7 +814,7 @@ def test_ap_hs20_eap_invalid_cred(dev, apdev):
     """Hotspot 2.0 connection with invalid cred configuration"""
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     dev[0].add_cred_values({ 'realm': "example.com",
@@ -796,7 +828,7 @@ def test_ap_hs20_nai_realms(dev, apdev):
     params = hs20_ap_params()
     params['hessid'] = bssid
     params['nai_realm'] = [ "0,no.match.here;example.com;no.match.here.either,21[2:1][5:7]" ]
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     id = dev[0].add_cred_values({ 'realm': "example.com",
@@ -813,7 +845,7 @@ def test_ap_hs20_roaming_consortium(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['hessid'] = bssid
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     for consortium in [ "112233", "1020304050", "010203040506", "fedcba" ]:
@@ -842,7 +874,7 @@ def test_ap_hs20_username_roaming(dev, apdev):
                             "0,another.example.com" ]
     params['domain_name'] = "another.example.com"
     params['hessid'] = bssid
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     id = dev[0].add_cred_values({ 'realm': "roaming.example.com",
@@ -860,7 +892,7 @@ def test_ap_hs20_username_unknown(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['hessid'] = bssid
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     id = dev[0].add_cred_values({ 'realm': "example.com",
@@ -878,7 +910,7 @@ def test_ap_hs20_username_unknown2(dev, apdev):
     params = hs20_ap_params()
     params['hessid'] = bssid
     del params['domain_name']
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     id = dev[0].add_cred_values({ 'realm': "example.com",
@@ -896,7 +928,7 @@ def test_ap_hs20_gas_while_associated(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['hessid'] = bssid
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     id = dev[0].add_cred_values({ 'realm': "example.com",
@@ -920,13 +952,13 @@ def test_ap_hs20_gas_with_another_ap_while_associated(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['hessid'] = bssid
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     bssid2 = apdev[1]['bssid']
     params = hs20_ap_params()
     params['hessid'] = bssid2
     params['nai_realm'] = [ "0,no-match.example.org,13[5:6],21[2:4][5:7]" ]
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     dev[0].hs20_enable()
     id = dev[0].add_cred_values({ 'realm': "example.com",
@@ -964,13 +996,13 @@ def _test_ap_hs20_gas_while_associated_with_pmf(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['hessid'] = bssid
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     bssid2 = apdev[1]['bssid']
     params = hs20_ap_params()
     params['hessid'] = bssid2
     params['nai_realm'] = [ "0,no-match.example.org,13[5:6],21[2:4][5:7]" ]
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     dev[0].hs20_enable()
     dev[0].request("SET pmf 2")
@@ -1001,13 +1033,13 @@ def _test_ap_hs20_gas_with_another_ap_while_using_pmf(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['hessid'] = bssid
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     bssid2 = apdev[1]['bssid']
     params = hs20_ap_params()
     params['hessid'] = bssid2
     params['nai_realm'] = [ "0,no-match.example.org,13[5:6],21[2:4][5:7]" ]
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     dev[0].hs20_enable()
     dev[0].request("SET pmf 2")
@@ -1040,8 +1072,7 @@ def test_ap_hs20_gas_frag_while_associated(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['hessid'] = bssid
-    hostapd.add_ap(apdev[0]['ifname'], params)
-    hapd = hostapd.Hostapd(apdev[0]['ifname'])
+    hapd = hostapd.add_ap(apdev[0], params)
     hapd.set("gas_frag_limit", "50")
 
     dev[0].hs20_enable()
@@ -1066,7 +1097,7 @@ def test_ap_hs20_multiple_connects(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['hessid'] = bssid
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     values = { 'realm': "example.com",
@@ -1106,7 +1137,7 @@ def test_ap_hs20_disallow_aps(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['hessid'] = bssid
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     values = { 'realm': "example.com",
@@ -1203,12 +1234,12 @@ def test_ap_hs20_prefer_home(dev, apdev):
     check_eap_capa(dev[0], "MSCHAPV2")
     params = hs20_ap_params()
     params['domain_name'] = "example.org"
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     params = hs20_ap_params()
     params['ssid'] = "test-hs20-other"
     params['domain_name'] = "example.com"
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     values = default_cred()
     values['domain'] = "example.com"
@@ -1220,12 +1251,12 @@ def test_ap_hs20_req_roaming_consortium(dev, apdev):
     """Hotspot 2.0 required roaming consortium"""
     check_eap_capa(dev[0], "MSCHAPV2")
     params = hs20_ap_params()
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     params = hs20_ap_params()
     params['ssid'] = "test-hs20-other"
     params['roaming_consortium'] = [ "223344" ]
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     values = default_cred()
     values['required_roaming_consortium'] = "223344"
@@ -1247,13 +1278,13 @@ def test_ap_hs20_excluded_ssid(dev, apdev):
     params = hs20_ap_params()
     params['roaming_consortium'] = [ "223344" ]
     params['anqp_3gpp_cell_net'] = "555,444"
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     params = hs20_ap_params()
     params['ssid'] = "test-hs20-other"
     params['roaming_consortium'] = [ "223344" ]
     params['anqp_3gpp_cell_net'] = "555,444"
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     values = default_cred()
     values['excluded_ssid'] = "test-hs20"
@@ -1291,7 +1322,7 @@ def test_ap_hs20_roam_to_higher_prio(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params(ssid="test-hs20-visited")
     params['domain_name'] = "visited.example.org"
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     id = dev[0].add_cred_values({ 'realm': "example.com",
@@ -1308,7 +1339,7 @@ def test_ap_hs20_roam_to_higher_prio(dev, apdev):
     bssid2 = apdev[1]['bssid']
     params = hs20_ap_params(ssid="test-hs20-home")
     params['domain_name'] = "example.com"
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     dev[0].scan_for_bss(bssid2, freq="2412", force_scan=True)
     dev[0].request("INTERWORKING_SELECT auto freq=2412")
@@ -1330,7 +1361,7 @@ def test_ap_hs20_domain_suffix_match_full(dev, apdev):
     check_eap_capa(dev[0], "MSCHAPV2")
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     id = dev[0].add_cred_values({ 'realm': "example.com",
@@ -1361,7 +1392,7 @@ def test_ap_hs20_domain_suffix_match(dev, apdev):
     check_domain_match_full(dev[0])
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     id = dev[0].add_cred_values({ 'realm': "example.com",
@@ -1379,12 +1410,12 @@ def test_ap_hs20_roaming_partner_preference(dev, apdev):
     check_eap_capa(dev[0], "MSCHAPV2")
     params = hs20_ap_params()
     params['domain_name'] = "roaming.example.org"
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     params = hs20_ap_params()
     params['ssid'] = "test-hs20-other"
     params['domain_name'] = "roaming.example.net"
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     logger.info("Verify default vs. specified preference")
     values = default_cred()
@@ -1404,12 +1435,12 @@ def test_ap_hs20_max_bss_load(dev, apdev):
     check_eap_capa(dev[0], "MSCHAPV2")
     params = hs20_ap_params()
     params['bss_load_test'] = "12:200:20000"
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     params = hs20_ap_params()
     params['ssid'] = "test-hs20-other"
     params['bss_load_test'] = "5:20:10000"
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     logger.info("Verify maximum BSS load constraint")
     values = default_cred()
@@ -1440,11 +1471,11 @@ def test_ap_hs20_max_bss_load2(dev, apdev):
     check_eap_capa(dev[0], "MSCHAPV2")
     params = hs20_ap_params()
     params['bss_load_test'] = "12:200:20000"
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     params = hs20_ap_params()
     params['ssid'] = "test-hs20-other"
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     logger.info("Verify maximum BSS load constraint with AP advertisement")
     values = default_cred()
@@ -1474,7 +1505,7 @@ def _test_ap_hs20_multi_cred_sp_prio(dev, apdev):
     params['hessid'] = bssid
     del params['domain_name']
     params['anqp_3gpp_cell_net'] = "232,01"
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     dev[0].scan_for_bss(bssid, freq="2412")
@@ -1519,7 +1550,7 @@ def _test_ap_hs20_multi_cred_sp_prio2(dev, apdev):
     del params['nai_realm']
     del params['domain_name']
     params['anqp_3gpp_cell_net'] = "232,01"
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     bssid2 = apdev[1]['bssid']
     params = hs20_ap_params()
@@ -1527,7 +1558,7 @@ def _test_ap_hs20_multi_cred_sp_prio2(dev, apdev):
     params['hessid'] = bssid2
     del params['domain_name']
     del params['anqp_3gpp_cell_net']
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     dev[0].hs20_enable()
     dev[0].request("SET external_sim 1")
@@ -1585,7 +1616,7 @@ def test_ap_hs20_req_conn_capab(dev, apdev):
     check_eap_capa(dev[0], "MSCHAPV2")
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     dev[0].scan_for_bss(bssid, freq="2412")
@@ -1618,7 +1649,7 @@ def test_ap_hs20_req_conn_capab(dev, apdev):
     bssid2 = apdev[1]['bssid']
     params = hs20_ap_params(ssid="test-hs20b")
     params['hs20_conn_capab'] = [ "1:0:2", "6:22:1", "17:5060:0", "50:0:1" ]
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     dev[0].remove_cred(id)
     values = conn_capab_cred(domain="example.org", req_conn_capab="50")
@@ -1642,12 +1673,12 @@ def test_ap_hs20_req_conn_capab_and_roaming_partner_preference(dev, apdev):
     params = hs20_ap_params()
     params['domain_name'] = "roaming.example.org"
     params['hs20_conn_capab'] = [ "1:0:2", "6:22:1", "17:5060:0", "50:0:1" ]
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     bssid2 = apdev[1]['bssid']
     params = hs20_ap_params(ssid="test-hs20-b")
     params['domain_name'] = "roaming.example.net"
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     values = default_cred()
     values['roaming_partner'] = "roaming.example.net,1,127,*"
@@ -1692,7 +1723,7 @@ def test_ap_hs20_min_bandwidth_home(dev, apdev):
     check_eap_capa(dev[0], "MSCHAPV2")
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     dev[0].scan_for_bss(bssid, freq="2412")
@@ -1719,7 +1750,7 @@ def test_ap_hs20_min_bandwidth_home(dev, apdev):
     bssid2 = apdev[1]['bssid']
     params = hs20_ap_params(ssid="test-hs20-b")
     params['hs20_wan_metrics'] = "01:8000:1000:1:1:3000"
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     check_auto_select(dev[0], bssid2)
 
@@ -1728,16 +1759,16 @@ def test_ap_hs20_min_bandwidth_home_hidden_ssid_in_scan_res(dev, apdev):
     check_eap_capa(dev[0], "MSCHAPV2")
     bssid = apdev[0]['bssid']
 
-    hapd = hostapd.add_ap(apdev[0]['ifname'], { "ssid": 'secret',
-                                                "ignore_broadcast_ssid": "1" })
+    hapd = hostapd.add_ap(apdev[0], { "ssid": 'secret',
+                                      "ignore_broadcast_ssid": "1" })
     dev[0].scan_for_bss(bssid, freq=2412)
     hapd.disable()
-    hapd_global = hostapd.HostapdGlobal()
+    hapd_global = hostapd.HostapdGlobal(apdev[0])
     hapd_global.flush()
     hapd_global.remove(apdev[0]['ifname'])
 
     params = hs20_ap_params()
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     dev[0].scan_for_bss(bssid, freq="2412")
@@ -1764,7 +1795,7 @@ def test_ap_hs20_min_bandwidth_home_hidden_ssid_in_scan_res(dev, apdev):
     bssid2 = apdev[1]['bssid']
     params = hs20_ap_params(ssid="test-hs20-b")
     params['hs20_wan_metrics'] = "01:8000:1000:1:1:3000"
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     check_auto_select(dev[0], bssid2)
 
@@ -1775,7 +1806,7 @@ def test_ap_hs20_min_bandwidth_roaming(dev, apdev):
     check_eap_capa(dev[0], "MSCHAPV2")
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     dev[0].scan_for_bss(bssid, freq="2412")
@@ -1802,7 +1833,7 @@ def test_ap_hs20_min_bandwidth_roaming(dev, apdev):
     bssid2 = apdev[1]['bssid']
     params = hs20_ap_params(ssid="test-hs20-b")
     params['hs20_wan_metrics'] = "01:8000:1000:1:1:3000"
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     check_auto_select(dev[0], bssid2)
 
@@ -1813,12 +1844,12 @@ def test_ap_hs20_min_bandwidth_and_roaming_partner_preference(dev, apdev):
     params = hs20_ap_params()
     params['domain_name'] = "roaming.example.org"
     params['hs20_wan_metrics'] = "01:8000:1000:1:1:3000"
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     bssid2 = apdev[1]['bssid']
     params = hs20_ap_params(ssid="test-hs20-b")
     params['domain_name'] = "roaming.example.net"
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     values = default_cred()
     values['roaming_partner'] = "roaming.example.net,1,127,*"
@@ -1836,7 +1867,7 @@ def test_ap_hs20_min_bandwidth_no_wan_metrics(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     del params['hs20_wan_metrics']
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     dev[0].scan_for_bss(bssid, freq="2412")
@@ -1920,7 +1951,7 @@ def _test_ap_hs20_deauth_req_from_radius(dev, apdev):
     params = hs20_ap_params()
     params['nai_realm'] = [ "0,example.com,21[2:4]" ]
     params['hs20_deauth_req_timeout'] = "2"
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].request("SET pmf 2")
     dev[0].hs20_enable()
@@ -1948,7 +1979,7 @@ def _test_ap_hs20_remediation_required(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['nai_realm'] = [ "0,example.com,21[2:4]" ]
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].request("SET pmf 1")
     dev[0].hs20_enable()
@@ -1976,7 +2007,7 @@ def _test_ap_hs20_remediation_required_ctrl(dev, apdev):
     addr = dev[0].own_addr()
     params = hs20_ap_params()
     params['nai_realm'] = [ "0,example.com,21[2:4]" ]
-    hapd = hostapd.add_ap(apdev[0]['ifname'], params)
+    hapd = hostapd.add_ap(apdev[0], params)
 
     dev[0].request("SET pmf 1")
     dev[0].hs20_enable()
@@ -2017,7 +2048,7 @@ def _test_ap_hs20_session_info(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['nai_realm'] = [ "0,example.com,21[2:4]" ]
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].request("SET pmf 1")
     dev[0].hs20_enable()
@@ -2045,7 +2076,7 @@ def test_ap_hs20_osen(dev, apdev):
                'auth_server_addr': "127.0.0.1",
                'auth_server_port': "1812",
                'auth_server_shared_secret': "radius" }
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[1].connect("osen", key_mgmt="NONE", scan_freq="2412",
                    wait_connect=False)
@@ -2080,7 +2111,7 @@ def test_ap_hs20_network_preference(dev, apdev):
     check_eap_capa(dev[0], "MSCHAPV2")
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     values = { 'realm': "example.com",
@@ -2103,7 +2134,7 @@ def test_ap_hs20_network_preference(dev, apdev):
 
     bssid2 = apdev[1]['bssid']
     params = hostapd.wpa2_params(ssid="home", passphrase="12345678")
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     dev[0].scan_for_bss(bssid2, freq="2412")
     dev[0].request("INTERWORKING_SELECT auto freq=2412")
@@ -2121,7 +2152,7 @@ def test_ap_hs20_network_preference2(dev, apdev):
     check_eap_capa(dev[0], "MSCHAPV2")
     bssid2 = apdev[1]['bssid']
     params = hostapd.wpa2_params(ssid="home", passphrase="12345678")
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     dev[0].hs20_enable()
     values = { 'realm': "example.com",
@@ -2144,7 +2175,7 @@ def test_ap_hs20_network_preference2(dev, apdev):
 
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].scan_for_bss(bssid, freq="2412")
     dev[0].request("INTERWORKING_SELECT auto freq=2412")
@@ -2162,12 +2193,12 @@ def test_ap_hs20_network_preference3(dev, apdev):
     check_eap_capa(dev[0], "MSCHAPV2")
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     bssid2 = apdev[1]['bssid']
     params = hs20_ap_params(ssid="test-hs20b")
     params['nai_realm'] = "0,example.org,13[5:6],21[2:4][5:7]"
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     dev[0].hs20_enable()
     values = { 'realm': "example.com",
@@ -2203,14 +2234,14 @@ def test_ap_hs20_network_preference4(dev, apdev):
     check_eap_capa(dev[0], "MSCHAPV2")
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     bssid2 = apdev[1]['bssid']
     params = hs20_ap_params(ssid="test-hs20b")
     params['hessid'] = bssid2
     params['anqp_3gpp_cell_net'] = "555,444"
     params['domain_name'] = "wlan.mnc444.mcc555.3gppnetwork.org"
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     dev[0].hs20_enable()
     values = { 'realm': "example.com",
@@ -2246,7 +2277,7 @@ def test_ap_hs20_interworking_select_blocking_scan(dev, apdev):
     check_eap_capa(dev[0], "MSCHAPV2")
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     values = { 'realm': "example.com",
@@ -2272,7 +2303,7 @@ def test_ap_hs20_fetch_osu(dev, apdev):
     params['osu_icon'] = "w1fi_logo"
     params['osu_service_desc'] = [ "eng:Example services", "fin:Esimerkkipalveluja" ]
     params['osu_server_uri'] = "https://example.com/osu/"
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     bssid2 = apdev[1]['bssid']
     params = hs20_ap_params(ssid="test-hs20b")
@@ -2285,7 +2316,7 @@ def test_ap_hs20_fetch_osu(dev, apdev):
     params['osu_icon'] = "w1fi_logo"
     params['osu_service_desc'] = [ "eng:Example services2", "fin:Esimerkkipalveluja2" ]
     params['osu_server_uri'] = "https://example.org/osu/"
-    hostapd.add_ap(apdev[1]['ifname'], params)
+    hostapd.add_ap(apdev[1], params)
 
     with open("w1fi_logo.png", "r") as f:
         orig_logo = f.read()
@@ -2436,7 +2467,7 @@ def test_ap_hs20_req_hs20_icon(dev, apdev):
     params['osu_icon'] = [ "w1fi_logo", "w1fi_logo2" ]
     params['osu_service_desc'] = [ "eng:Example services", "fin:Esimerkkipalveluja" ]
     params['osu_server_uri'] = "https://example.com/osu/"
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].scan_for_bss(bssid, freq="2412")
 
@@ -2488,7 +2519,7 @@ def test_ap_hs20_req_hs20_icon_parallel(dev, apdev):
     params['osu_icon'] = [ "w1fi_logo", "w1fi_logo2" ]
     params['osu_service_desc'] = [ "eng:Example services", "fin:Esimerkkipalveluja" ]
     params['osu_server_uri'] = "https://example.com/osu/"
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].scan_for_bss(bssid, freq="2412")
 
@@ -2539,7 +2570,7 @@ def test_ap_hs20_fetch_osu_stop(dev, apdev):
     params['osu_icon'] = "w1fi_logo"
     params['osu_service_desc'] = [ "eng:Example services", "fin:Esimerkkipalveluja" ]
     params['osu_server_uri'] = "https://example.com/osu/"
-    hapd = hostapd.add_ap(apdev[0]['ifname'], params)
+    hapd = hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     dir = "/tmp/osu-fetch"
@@ -2623,7 +2654,7 @@ def test_ap_hs20_ft(dev, apdev):
     params['r1_key_holder'] = "000102030405"
     params["mobility_domain"] = "a1b2"
     params["reassociation_deadline"] = "1000"
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     id = dev[0].add_cred_values({ 'realm': "example.com",
@@ -2667,12 +2698,12 @@ def test_ap_hs20_remediation_sql(dev, apdev, params):
                    "private_key": "auth_serv/server.key",
                    "subscr_remediation_url": "https://example.org/",
                    "subscr_remediation_method": "1" }
-        hostapd.add_ap(apdev[1]['ifname'], params)
+        hostapd.add_ap(apdev[1], params)
 
         bssid = apdev[0]['bssid']
         params = hs20_ap_params()
         params['auth_server_port'] = "18128"
-        hostapd.add_ap(apdev[0]['ifname'], params)
+        hostapd.add_ap(apdev[0], params)
 
         dev[0].request("SET pmf 1")
         dev[0].hs20_enable()
@@ -2706,7 +2737,7 @@ def test_ap_hs20_external_selection(dev, apdev):
     params = hs20_ap_params()
     params['hessid'] = bssid
     params['disable_dgaf'] = '1'
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     dev[0].connect("test-hs20", proto="RSN", key_mgmt="WPA-EAP", eap="TTLS",
@@ -2723,7 +2754,7 @@ def test_ap_hs20_random_mac_addr(dev, apdev):
     params = hs20_ap_params()
     params['hessid'] = bssid
     params['disable_dgaf'] = '1'
-    hapd = hostapd.add_ap(apdev[0]['ifname'], params)
+    hapd = hostapd.add_ap(apdev[0], params)
 
     wpas = WpaSupplicant(global_iface='/tmp/wpas-wlan5')
     wpas.interface_add("wlan5")
@@ -2758,7 +2789,7 @@ def test_ap_hs20_multi_network_and_cred_removal(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['nai_realm'] = [ "0,example.com,25[3:26]"]
-    hapd = hostapd.add_ap(apdev[0]['ifname'], params)
+    hapd = hostapd.add_ap(apdev[0], params)
 
     dev[0].add_network()
     dev[0].hs20_enable()
@@ -2794,7 +2825,7 @@ def test_ap_hs20_interworking_add_network(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['nai_realm'] = [ "0,example.com,21[3:26][6:7][99:99]" ]
-    hostapd.add_ap(apdev[0]['ifname'], params)
+    hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     dev[0].add_cred_values(default_cred(user="user"))
@@ -2809,7 +2840,7 @@ def _test_ap_hs20_proxyarp(dev, apdev):
     params['hessid'] = bssid
     params['disable_dgaf'] = '0'
     params['proxy_arp'] = '1'
-    hapd = hostapd.add_ap(apdev[0]['ifname'], params, no_enable=True)
+    hapd = hostapd.add_ap(apdev[0], params, no_enable=True)
     if "OK" in hapd.request("ENABLE"):
         raise Exception("Incomplete hostapd configuration was accepted")
     hapd.set("ap_isolate", "1")
@@ -2894,17 +2925,17 @@ def test_ap_hs20_hidden_ssid_in_scan_res(dev, apdev):
     check_eap_capa(dev[0], "MSCHAPV2")
     bssid = apdev[0]['bssid']
 
-    hapd = hostapd.add_ap(apdev[0]['ifname'], { "ssid": 'secret',
-                                                "ignore_broadcast_ssid": "1" })
+    hapd = hostapd.add_ap(apdev[0], { "ssid": 'secret',
+                                      "ignore_broadcast_ssid": "1" })
     dev[0].scan_for_bss(bssid, freq=2412)
     hapd.disable()
-    hapd_global = hostapd.HostapdGlobal()
+    hapd_global = hostapd.HostapdGlobal(apdev[0])
     hapd_global.flush()
     hapd_global.remove(apdev[0]['ifname'])
 
     params = hs20_ap_params()
     params['hessid'] = bssid
-    hapd = hostapd.add_ap(apdev[0]['ifname'], params)
+    hapd = hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     id = dev[0].add_cred_values({ 'realm': "example.com",
@@ -2942,7 +2973,7 @@ def _test_ap_hs20_proxyarp_dgaf(dev, apdev, disabled):
     params['na_mcast_to_ucast'] = '1'
     params['ap_isolate'] = '1'
     params['bridge'] = 'ap-br0'
-    hapd = hostapd.add_ap(apdev[0]['ifname'], params, no_enable=True)
+    hapd = hostapd.add_ap(apdev[0], params, no_enable=True)
     try:
         hapd.enable()
     except:
@@ -3332,7 +3363,7 @@ def _test_proxyarp_open(dev, apdev, params, ebtables=False):
     bssid = apdev[0]['bssid']
     params = { 'ssid': 'open' }
     params['proxy_arp'] = '1'
-    hapd = hostapd.add_ap(apdev[0]['ifname'], params, no_enable=True)
+    hapd = hostapd.add_ap(apdev[0], params, no_enable=True)
     hapd.set("ap_isolate", "1")
     hapd.set('bridge', 'ap-br0')
     hapd.dump_monitor()
@@ -3348,7 +3379,7 @@ def _test_proxyarp_open(dev, apdev, params, ebtables=False):
         raise Exception("AP startup failed")
 
     params2 = { 'ssid': 'another' }
-    hapd2 = hostapd.add_ap(apdev[1]['ifname'], params2, no_enable=True)
+    hapd2 = hostapd.add_ap(apdev[1], params2, no_enable=True)
     hapd2.set('bridge', 'ap-br0')
     hapd2.enable()
 
@@ -3801,7 +3832,7 @@ def test_ap_hs20_connect_deinit(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['hessid'] = bssid
-    hapd = hostapd.add_ap(apdev[0]['ifname'], params)
+    hapd = hostapd.add_ap(apdev[0], params)
 
     wpas = WpaSupplicant(global_iface='/tmp/wpas-wlan5')
     wpas.interface_add("wlan5", drv_params="")
@@ -3835,7 +3866,7 @@ def test_ap_hs20_anqp_format_errors(dev, apdev):
     bssid = apdev[0]['bssid']
     params = hs20_ap_params()
     params['hessid'] = bssid
-    hapd = hostapd.add_ap(apdev[0]['ifname'], params)
+    hapd = hostapd.add_ap(apdev[0], params)
 
     dev[0].hs20_enable()
     values = { 'realm': "example.com",

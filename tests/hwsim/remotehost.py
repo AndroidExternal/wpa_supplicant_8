@@ -11,6 +11,8 @@ import threading
 logger = logging.getLogger()
 
 def execute_thread(command, reply):
+    cmd = ' '.join(command)
+    logger.debug("thread run: " + cmd)
     try:
         status = 0;
         buf = subprocess.check_output(command, stderr=subprocess.STDOUT)
@@ -18,9 +20,6 @@ def execute_thread(command, reply):
         status = e.returncode
         buf = e.output
 
-    cmd = ""
-    for c in command:
-        cmd = cmd + " " + c
     logger.debug("thread cmd: " + cmd)
     logger.debug("thread exit status: " + str(status))
     logger.debug("thread exit buf: " + str(buf))
@@ -32,20 +31,20 @@ class Host():
         self.host = host
         self.name = name
         self.user = user
+        self.monitors = []
+        self.monitor_thread = None
+        self.logs = []
         self.ifname = ifname
         self.port = port
+        self.dev = None
         if self.name == "" and host != None:
             self.name = host
 
     def local_execute(self, command):
-        logger.debug("execute: " + command)
-        words = command.split()
-        cmd = []
-        for word in words:
-            cmd.append(word)
+        logger.debug("execute: " + str(command))
         try:
             status = 0;
-            buf = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
+            buf = subprocess.check_output(command, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             status = e.returncode
             buf = e.output
@@ -58,10 +57,8 @@ class Host():
         if self.host is None:
             return self.local_execute(command)
 
-        cmd = ["ssh", self.user + "@" + self.host, command]
-        _cmd = self.name + " execute: "
-        for c in cmd:
-            _cmd = _cmd + " " + c
+        cmd = ["ssh", self.user + "@" + self.host, ' '.join(command)]
+        _cmd = self.name + " execute: " + ' '.join(cmd)
         logger.debug(_cmd)
         try:
             status = 0
@@ -77,12 +74,10 @@ class Host():
     # async execute
     def execute_run(self, command, res):
         if self.host is None:
-            cmd = [command]
+            cmd = command
         else:
-            cmd = ["ssh",  self.user + "@" + self.host, command]
-        _cmd = self.name + " execute_run: "
-        for c in cmd:
-            _cmd = _cmd + " " + c
+            cmd = ["ssh",  self.user + "@" + self.host, ' '.join(command)]
+        _cmd = self.name + " execute_run: " + ' '.join(cmd)
         logger.debug(_cmd)
         t = threading.Thread(target = execute_thread, args=(cmd, res))
         t.start()
@@ -97,3 +92,13 @@ class Host():
         logger.debug(self.name + " wait_execute_complete(" + wait_str + "): ")
         if t.isAlive():
             t.join(wait)
+
+    def add_log(self, log_file):
+        self.logs.append(log_file)
+
+    def get_logs(self, local_log_dir=None):
+        for log in self.logs:
+            if local_log_dir:
+                self.local_execute(["scp", self.user + "@[" + self.host + "]:" + log, local_log_dir])
+            self.execute(["rm", log])
+        del self.logs[:]

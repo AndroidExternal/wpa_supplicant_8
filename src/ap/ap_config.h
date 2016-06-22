@@ -41,6 +41,10 @@ struct mesh_conf {
 #define MESH_CONF_SEC_AUTH BIT(1)
 #define MESH_CONF_SEC_AMPE BIT(2)
 	unsigned int security;
+	enum mfp_options ieee80211w;
+	unsigned int pairwise_cipher;
+	unsigned int group_cipher;
+	unsigned int mgmt_group_cipher;
 	int dot11MeshMaxRetries;
 	int dot11MeshRetryTimeout; /* msec */
 	int dot11MeshConfirmTimeout; /* msec */
@@ -504,6 +508,7 @@ struct hostapd_bss_config {
 
 	u16 gas_comeback_delay;
 	int gas_frag_limit;
+	int gas_address3;
 
 	u8 qos_map_set[16 + 2 * 21];
 	unsigned int qos_map_set_len;
@@ -557,6 +562,7 @@ struct hostapd_bss_config {
 #endif /* CONFIG_RADIUS_TEST */
 
 	struct wpabuf *vendor_elements;
+	struct wpabuf *assocresp_elements;
 
 	unsigned int sae_anti_clogging_threshold;
 	int *sae_groups;
@@ -572,7 +578,7 @@ struct hostapd_bss_config {
 #define MESH_ENABLED BIT(0)
 	int mesh;
 
-	int radio_measurements;
+	u8 radio_measurements[RRM_CAPABILITIES_IE_LEN];
 
 	int vendor_vht;
 
@@ -693,6 +699,9 @@ struct hostapd_config {
 	} *acs_chan_bias;
 	unsigned int num_acs_chan_bias;
 #endif /* CONFIG_ACS */
+
+	struct wpabuf *lci;
+	struct wpabuf *civic;
 };
 
 

@@ -179,6 +179,7 @@ int hostapd_build_ap_extra_ies(struct hostapd_data *hapd,
 
 	add_buf(&beacon, hapd->conf->vendor_elements);
 	add_buf(&proberesp, hapd->conf->vendor_elements);
+	add_buf(&assocresp, hapd->conf->assocresp_elements);
 
 	*beacon_ret = beacon;
 	*proberesp_ret = proberesp;
@@ -362,7 +363,8 @@ int hostapd_sta_add(struct hostapd_data *hapd,
 		    u16 listen_interval,
 		    const struct ieee80211_ht_capabilities *ht_capab,
 		    const struct ieee80211_vht_capabilities *vht_capab,
-		    u32 flags, u8 qosinfo, u8 vht_opmode, int set)
+		    u32 flags, u8 qosinfo, u8 vht_opmode, int supp_p2p_ps,
+		    int set)
 {
 	struct hostapd_sta_add_params params;
 
@@ -384,6 +386,7 @@ int hostapd_sta_add(struct hostapd_data *hapd,
 	params.vht_opmode = vht_opmode;
 	params.flags = hostapd_sta_flags_to_drv(flags);
 	params.qosinfo = qosinfo;
+	params.support_p2p_ps = supp_p2p_ps;
 	params.set = set;
 	return hapd->driver->sta_add(hapd->drv_priv, &params);
 }
@@ -672,6 +675,36 @@ int hostapd_drv_send_action(struct hostapd_data *hapd, unsigned int freq,
 			    unsigned int wait, const u8 *dst, const u8 *data,
 			    size_t len)
 {
+	const u8 *bssid;
+	const u8 wildcard_bssid[ETH_ALEN] = {
+		0xff, 0xff, 0xff, 0xff, 0xff, 0xff
+	};
+
+	if (hapd->driver == NULL || hapd->driver->send_action == NULL)
+		return 0;
+	bssid = hapd->own_addr;
+	if (!is_multicast_ether_addr(dst) &&
+	    len > 0 && data[0] == WLAN_ACTION_PUBLIC) {
+		struct sta_info *sta;
+
+		/*
+		 * Public Action frames to a STA that is not a member of the BSS
+		 * shall use wildcard BSSID value.
+		 */
+		sta = ap_get_sta(hapd, dst);
+		if (!sta || !(sta->flags & WLAN_STA_ASSOC))
+			bssid = wildcard_bssid;
+	}
+	return hapd->driver->send_action(hapd->drv_priv, freq, wait, dst,
+					 hapd->own_addr, bssid, data, len, 0);
+}
+
+
+int hostapd_drv_send_action_addr3_ap(struct hostapd_data *hapd,
+				     unsigned int freq,
+				     unsigned int wait, const u8 *dst,
+				     const u8 *data, size_t len)
+{
 	if (hapd->driver == NULL || hapd->driver->send_action == NULL)
 		return 0;
 	return hapd->driver->send_action(hapd->drv_priv, freq, wait, dst,
@@ -744,6 +777,20 @@ static void hostapd_get_hw_mode_any_channels(struct hostapd_data *hapd,
 		    !(chan->flag & HOSTAPD_CHAN_DISABLED))
 			int_array_add_unique(freq_list, chan->freq);
 	}
+}
+
+
+void hostapd_get_ext_capa(struct hostapd_iface *iface)
+{
+	struct hostapd_data *hapd = iface->bss[0];
+
+	if (!hapd->driver || !hapd->driver->get_ext_capab)
+		return;
+
+	hapd->driver->get_ext_capab(hapd->drv_priv, WPA_IF_AP_BSS,
+				    &iface->extended_capa,
+				    &iface->extended_capa_mask,
+				    &iface->extended_capa_len);
 }
 
 

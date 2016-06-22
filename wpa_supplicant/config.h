@@ -1039,7 +1039,8 @@ struct wpa_config {
 	 *
 	 * By default, PMF is disabled unless enabled by the per-network
 	 * ieee80211w=1 or ieee80211w=2 parameter. pmf=1/2 can be used to change
-	 * this default behavior.
+	 * this default behavior for RSN network (this is not applicable for
+	 * non-RSN cases).
 	 */
 	enum mfp_options pmf;
 
@@ -1291,6 +1292,16 @@ struct wpa_config {
 	 */
 	enum mbo_cellular_capa mbo_cell_capa;
 #endif /* CONFIG_MBO */
+
+	/**
+	 * gas_address3 - GAS Address3 field behavior
+	 *
+	 * Values:
+	 * 0 - P2P specification (Address3 = AP BSSID)
+	 * 1 = IEEE 802.11 standard compliant (Address3 = Wildcard BSSID when
+	 *	sent to not-associated AP; if associated, AP BSSID)
+	 */
+	int gas_address3;
 };
 
 

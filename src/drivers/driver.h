@@ -54,6 +54,13 @@
 #define HOSTAPD_CHAN_VHT_130_30 0x04000000
 #define HOSTAPD_CHAN_VHT_150_10 0x08000000
 
+/* Filter gratuitous ARP */
+#define WPA_DATA_FRAME_FILTER_FLAG_ARP BIT(0)
+/* Filter unsolicited Neighbor Advertisement */
+#define WPA_DATA_FRAME_FILTER_FLAG_NA BIT(1)
+/* Filter unicast IP packets encrypted using the GTK */
+#define WPA_DATA_FRAME_FILTER_FLAG_GTK BIT(2)
+
 /**
  * enum reg_change_initiator - Regulatory change initiator
  */
@@ -1365,6 +1372,12 @@ struct wpa_driver_capa {
  * offset, namely the 6th byte in the Action frame body.
  */
 #define WPA_DRIVER_FLAGS_TX_POWER_INSERTION		0x00000008
+/**
+ * Driver supports RRM. With this support, the driver will accept to use RRM in
+ * (Re)Association Request frames, without supporting quiet period.
+ */
+#define WPA_DRIVER_FLAGS_SUPPORT_RRM			0x00000010
+
 	u32 rrm_flags;
 
 	/* Driver concurrency capabilities */
@@ -1419,6 +1432,7 @@ struct hostapd_sta_add_params {
 	size_t supp_channels_len;
 	const u8 *supp_oper_classes;
 	size_t supp_oper_classes_len;
+	int support_p2p_ps;
 };
 
 struct mac_address {
@@ -3537,6 +3551,28 @@ struct wpa_driver_ops {
 	 * Returns 0 on success, -1 on failure
 	 */
 	int (*abort_scan)(void *priv);
+
+	/**
+	 * configure_data_frame_filters - Request to configure frame filters
+	 * @priv: Private driver interface data
+	 * @filter_flags: The type of frames to filter (bitfield of
+	 * WPA_DATA_FRAME_FILTER_FLAG_*)
+	 * Returns: 0 on success or -1 on failure
+	 */
+	int (*configure_data_frame_filters)(void *priv, u32 filter_flags);
+
+	/**
+	 * get_ext_capab - Get extended capabilities for the specified interface
+	 * @priv: Private driver interface data
+	 * @type: Interface type for which to get extended capabilities
+	 * @ext_capab: Extended capabilities fetched
+	 * @ext_capab_mask: Extended capabilities mask
+	 * @ext_capab_len: Length of the extended capabilities
+	 * Returns: 0 on success or -1 on failure
+	 */
+	int (*get_ext_capab)(void *priv, enum wpa_driver_if_type type,
+			     const u8 **ext_capab, const u8 **ext_capab_mask,
+			     unsigned int *ext_capab_len);
 };
 
 
@@ -4406,6 +4442,12 @@ union wpa_event_data {
 		 * status_code - Status Code from (Re)association Response
 		 */
 		u16 status_code;
+
+		/**
+		 * timed_out - Whether failure is due to timeout (etc.) rather
+		 * than explicit rejection response from the AP.
+		 */
+		int timed_out;
 	} assoc_reject;
 
 	struct timeout_event {

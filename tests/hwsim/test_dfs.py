@@ -30,13 +30,7 @@ def start_dfs_ap(ap, allow_failure=False, ssid="dfs", ht=True, ht40=False,
                  channel=None):
     ifname = ap['ifname']
     logger.info("Starting AP " + ifname + " on DFS channel")
-    hapd_global = hostapd.HostapdGlobal()
-    hapd_global.remove(ifname)
-    hapd_global.add(ifname)
-    hapd = hostapd.Hostapd(ifname)
-    if not hapd.ping():
-        raise Exception("Could not ping hostapd")
-    hapd.set_defaults()
+    hapd = hostapd.add_ap(ap, {}, no_enable=True)
     hapd.set("ssid", ssid)
     hapd.set("country_code", "FI")
     hapd.set("ieee80211d", "1")
@@ -222,7 +216,7 @@ def test_dfs_radar(dev, apdev):
 def test_dfs_radar_on_non_dfs_channel(dev, apdev):
     """DFS radar detection test code on non-DFS channel"""
     params = { "ssid": "radar" }
-    hapd = hostapd.add_ap(apdev[0]['ifname'], params)
+    hapd = hostapd.add_ap(apdev[0], params)
 
     hapd.request("RADAR DETECTED freq=5260 ht_enabled=1 chan_width=1")
     hapd.request("RADAR DETECTED freq=2412 ht_enabled=1 chan_width=1")

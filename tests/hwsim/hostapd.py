@@ -11,6 +11,8 @@ import binascii
 import struct
 import wpaspy
 import remotehost
+import utils
+import subprocess
 
 logger = logging.getLogger()
 hapd_ctrl = '/var/run/hostapd'
@@ -20,7 +22,13 @@ def mac2tuple(mac):
     return struct.unpack('6B', binascii.unhexlify(mac.replace(':','')))
 
 class HostapdGlobal:
-    def __init__(self, hostname=None, port=8878):
+    def __init__(self, apdev=None):
+        try:
+            hostname = apdev['hostname']
+            port = apdev['port']
+        except:
+            hostname = None
+            port = 8878
         self.host = remotehost.Host(hostname)
         self.hostname = hostname
         self.port = port
@@ -33,6 +41,17 @@ class HostapdGlobal:
             self.mon = wpaspy.Ctrl(hostname, port)
             self.dbg = hostname + "/" + str(port)
         self.mon.attach()
+
+    def cmd_execute(self, cmd_array):
+        if self.hostname is None:
+            cmd = ' '.join(cmd_array)
+            proc = subprocess.Popen(cmd, stderr=subprocess.STDOUT,
+                                    stdout=subprocess.PIPE, shell=True)
+            out = proc.communicate()[0]
+            ret = proc.returncode
+            return ret, out
+        else:
+            return self.host.execute(cmd_array)
 
     def request(self, cmd, timeout=10):
         logger.debug(self.dbg + ": CTRL(global): " + cmd)
@@ -112,6 +131,7 @@ class HostapdGlobal:
 
 class Hostapd:
     def __init__(self, ifname, bssidx=0, hostname=None, port=8877):
+        self.hostname = hostname
         self.host = remotehost.Host(hostname, ifname)
         self.ifname = ifname
         if hostname is None:
@@ -125,6 +145,20 @@ class Hostapd:
         self.mon.attach()
         self.bssid = None
         self.bssidx = bssidx
+
+    def cmd_execute(self, cmd_array):
+        if self.hostname is None:
+            cmd = ""
+            for arg in cmd_array:
+                cmd += arg + " "
+            cmd = cmd.strip()
+            proc = subprocess.Popen(cmd, stderr=subprocess.STDOUT,
+                                    stdout=subprocess.PIPE, shell=True)
+            out = proc.communicate()[0]
+            ret = proc.returncode
+            return ret, out
+        else:
+            return self.host.execute(cmd_array)
 
     def close_ctrl(self):
         if self.mon is not None:
@@ -339,10 +373,23 @@ class Hostapd:
             return vals
         return None
 
-def add_ap(ifname, params, wait_enabled=True, no_enable=False, timeout=30,
-           hostname=None, port=8878):
-        logger.info("Starting AP " + ifname)
-        hapd_global = HostapdGlobal(hostname=hostname, port=port)
+def add_ap(apdev, params, wait_enabled=True, no_enable=False, timeout=30):
+        if isinstance(apdev, dict):
+            ifname = apdev['ifname']
+            try:
+                hostname = apdev['hostname']
+                port = apdev['port']
+                logger.info("Starting AP " + hostname + "/" + port + " " + ifname)
+            except:
+                logger.info("Starting AP " + ifname)
+                hostname = None
+                port = 8878
+        else:
+            ifname = apdev
+            logger.info("Starting AP " + ifname + " (old add_ap argument type)")
+            hostname = None
+            port = 8878
+        hapd_global = HostapdGlobal(apdev)
         hapd_global.remove(ifname)
         hapd_global.add(ifname)
         port = hapd_global.get_ctrl_iface_port(ifname)
@@ -376,33 +423,62 @@ def add_ap(ifname, params, wait_enabled=True, no_enable=False, timeout=30,
                 raise Exception("AP startup failed")
         return hapd
 
-def add_bss(phy, ifname, confname, ignore_error=False, hostname=None,
-            port=8878):
-    logger.info("Starting BSS phy=" + phy + " ifname=" + ifname)
-    hapd_global = HostapdGlobal(hostname=hostname, port=port)
+def add_bss(apdev, ifname, confname, ignore_error=False):
+    phy = utils.get_phy(apdev)
+    try:
+        hostname = apdev['hostname']
+        port = apdev['port']
+        logger.info("Starting BSS " + hostname + "/" + port + " phy=" + phy + " ifname=" + ifname)
+    except:
+        logger.info("Starting BSS phy=" + phy + " ifname=" + ifname)
+        hostname = None
+        port = 8878
+    hapd_global = HostapdGlobal(apdev)
     hapd_global.add_bss(phy, confname, ignore_error)
     port = hapd_global.get_ctrl_iface_port(ifname)
     hapd = Hostapd(ifname, hostname=hostname, port=port)
     if not hapd.ping():
         raise Exception("Could not ping hostapd")
+    return hapd
 
-def add_iface(ifname, confname, hostname=None, port=8878):
-    logger.info("Starting interface " + ifname)
-    hapd_global = HostapdGlobal(hostname=hostname, port=port)
+def add_iface(apdev, confname):
+    ifname = apdev['ifname']
+    try:
+        hostname = apdev['hostname']
+        port = apdev['port']
+        logger.info("Starting interface " + hostname + "/" + port + " " + ifname)
+    except:
+        logger.info("Starting interface " + ifname)
+        hostname = None
+        port = 8878
+    hapd_global = HostapdGlobal(apdev)
     hapd_global.add_iface(ifname, confname)
     port = hapd_global.get_ctrl_iface_port(ifname)
     hapd = Hostapd(ifname, hostname=hostname, port=port)
     if not hapd.ping():
         raise Exception("Could not ping hostapd")
+    return hapd
 
-def remove_bss(ifname, hostname=None, port=8878):
-    logger.info("Removing BSS " + ifname)
-    hapd_global = HostapdGlobal(hostname=hostname, port=port)
+def remove_bss(apdev, ifname=None):
+    if ifname == None:
+        ifname = apdev['ifname']
+    try:
+        hostname = apdev['hostname']
+        port = apdev['port']
+        logger.info("Removing BSS " + hostname + "/" + port + " " + ifname)
+    except:
+        logger.info("Removing BSS " + ifname)
+    hapd_global = HostapdGlobal(apdev)
     hapd_global.remove(ifname)
 
-def terminate(hostname=None, port=8878):
-    logger.info("Terminating hostapd")
-    hapd_global = HostapdGlobal(hostname=hostname, port=port)
+def terminate(apdev):
+    try:
+        hostname = apdev['hostname']
+        port = apdev['port']
+        logger.info("Terminating hostapd " + hostname + "/" + port)
+    except:
+        logger.info("Terminating hostapd")
+    hapd_global = HostapdGlobal(apdev)
     hapd_global.terminate()
 
 def wpa2_params(ssid=None, passphrase=None):
@@ -511,3 +587,7 @@ def ht40_minus_params(channel="1", ssid=None, country=None):
     params = ht20_params(channel, ssid, country)
     params['ht_capab'] = "[HT40-]"
     return params
+
+def cmd_execute(apdev, cmd):
+    hapd_global = HostapdGlobal(apdev)
+    return hapd_global.cmd_execute(cmd)
